@@ -115,13 +115,17 @@
 (defgeneric stripe-line-item-quantity (obj)
   (:documentation "Returns the integer quantity for the object."))
 
-(defun create-checkout-session (merchant-secret-key success-url cancel-url line-items reference-id)
-  "Creates a tax-aware Stripe checkout session from a list of protocol-compliant items."
+(defun create-checkout-session (merchant-secret-key success-url cancel-url line-items reference-id &rest extra-params)
+  "Creates a tax-aware Stripe checkout session. EXTRA-PARAMS accepts arbitrary alist pairs for Stripe options."
   (let ((payload `(("success_url" . ,success-url)
                    ("cancel_url" . ,cancel-url)
                    ("mode" . "payment")
-		   ("client_reference_id" . ,reference-id)
+                   ("client_reference_id" . ,reference-id)
                    ("automatic_tax[enabled]" . "true"))))
+    
+    ;; Append arbitrary extra parameters (like customer_email, shipping_options, etc.)
+    (when extra-params
+      (setf payload (append extra-params payload)))
     
     ;; Stripe requires arrays formatted as: line_items[0][price]=price_123
     (loop for item in line-items
