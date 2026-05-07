@@ -1,5 +1,3 @@
-;;;; package.lisp
-
 (defpackage #:cfbee.stripe
   (:use #:cl)
   (:export #:stripe-tax-code
@@ -11,7 +9,7 @@
            #:stripe-item-name
            #:stripe-item-price-cents
            #:stripe-item-currency
-           #:stripe-merchant-secret-key
+           #:stripe-secret-key
 	   #:with-stripe-sync
 
 	   ;; Commodity Line Item Protocol
@@ -19,4 +17,5 @@
 	   #:stripe-line-item-price-id
 	   #:stripe-line-item-quantity
 	   #:stripe-price-id
-	   #:create-checkout-session))
+	   #:create-checkout-session
+	   #:verify-stripe-signature))

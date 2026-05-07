@@ -23,13 +23,13 @@
 ;;;
 ;;; Protocol: Commodity Information Sync
 ;;;
-;;; Systems consuming the Stripe library must implement these for
-;;; their models.
+;;; Systems that rely on stripe product/commodity sync must implement
+;;; these for their models.
 
 (defgeneric stripe-item-name (obj))
 (defgeneric stripe-item-price-cents (obj))
 (defgeneric stripe-item-currency (obj))
-(defgeneric stripe-merchant-secret-key (obj))
+(defgeneric stripe-secret-key (obj))
 
 ;;;
 ;;; 
@@ -52,7 +52,7 @@
 
 (defun sync-model (obj)
   "Syncs any model that implements the Stripe protocol."
-  (let ((secret-key (stripe-merchant-secret-key obj)))
+  (let ((secret-key (stripe-secret-key obj)))
     (when secret-key
       (let ((existing-prod-id (stripe-product-id obj)))
 	(if existing-prod-id
@@ -115,7 +115,7 @@
 (defgeneric stripe-line-item-quantity (obj)
   (:documentation "Returns the integer quantity for the object."))
 
-(defun create-checkout-session (merchant-secret-key success-url cancel-url line-items reference-id &rest extra-params)
+(defun create-checkout-session (secret-key success-url cancel-url line-items reference-id &rest extra-params)
   "Creates a tax-aware Stripe checkout session. EXTRA-PARAMS accepts arbitrary alist pairs for Stripe options."
   (let ((payload `(("success_url" . ,success-url)
                    ("cancel_url" . ,cancel-url)
@@ -137,6 +137,28 @@
                          (princ-to-string (stripe-line-item-quantity item))) 
                    payload))
     
-    (let ((res (stripe-request merchant-secret-key "/checkout/sessions" :post payload)))
+    (let ((res (stripe-request secret-key "/checkout/sessions" :post payload)))
       ;; Return the Stripe-hosted checkout URL
       (cdr (assoc :url res)))))
+
+(defun verify-stripe-signature (raw-body signature-header endpoint-secret)
+  "Cryptographically verifies a Stripe webhook payload to prevent spoofing."
+  (let* ((parts (str:split "," signature-header))
+         (t-part (find-if (lambda (s) (str:starts-with-p "t=" s)) parts))
+         (v1-part (find-if (lambda (s) (str:starts-with-p "v1=" s)) parts)))
+    (unless (and t-part v1-part)
+      (return-from verify-stripe-signature nil))
+    
+    (let* ((timestamp (subseq t-part 2))
+           (expected-sig (subseq v1-part 3))
+           (signed-payload (format nil "~a.~a" timestamp raw-body))
+           (hmac (ironclad:make-mac :hmac 
+                                    (flexi-streams:string-to-octets endpoint-secret :external-format :utf-8) 
+                                    :sha256)))
+      
+      (ironclad:update-mac hmac (flexi-streams:string-to-octets signed-payload :external-format :utf-8))
+      
+      (let* ((mac-bytes (ironclad:produce-mac hmac))
+             (computed-sig (ironclad:byte-array-to-hex-string mac-bytes)))
+        
+        (string= expected-sig computed-sig)))))
