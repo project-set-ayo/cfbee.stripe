@@ -10,6 +10,7 @@
            #:stripe-item-price-cents
            #:stripe-item-currency
            #:stripe-secret-key
+	   #:stripe-account-id
 	   #:with-stripe-sync
 
 	   ;; Commodity Line Item Protocol

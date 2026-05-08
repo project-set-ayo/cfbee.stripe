@@ -30,58 +30,57 @@
 (defgeneric stripe-item-price-cents (obj))
 (defgeneric stripe-item-currency (obj))
 (defgeneric stripe-secret-key (obj))
+(defgeneric stripe-account-id (obj)
+  (:documentation "Returns the Stripe Connected Account ID (acct_1...) if applicable.")
+  (:method (obj) nil))
 
 ;;;
 ;;; 
 ;;;
 
-(defun stripe-request (secret-key endpoint method data)
+(defun stripe-request (secret-key endpoint method data &key stripe-account)
   (let ((url (concatenate 'string *stripe-api-url* endpoint))
-	(headers '(("Stripe-Version" . "2026-03-25.preview"))))
+        (headers (list (cons "Stripe-Version" "2026-03-25.preview"))))
+    
+    (when stripe-account
+      (push (cons "Stripe-Account" stripe-account) headers))
+    
     (cl-json:decode-json-from-string
      (dex:request url
-		  :method method
-		  ;; Basic Auth expects ("username" . "password")
-		  ;; stripe uses secret as username so empty password
-		  :basic-auth (cons secret-key "")
-		  :headers headers
-		  ;; Clean up nil values
-		  :content (when data 
-			     (remove-if (lambda (pair) (null (cdr pair)))
-					data))))))
+                  :method method
+                  :basic-auth (cons secret-key "")
+                  :headers headers
+                  :content (when data 
+                             (remove-if (lambda (pair) (null (cdr pair))) data))))))
 
 (defun sync-model (obj)
-  "Syncs any model that implements the Stripe protocol."
-  (let ((secret-key (stripe-secret-key obj)))
+  (let ((secret-key (stripe-secret-key obj))
+        (account-id (stripe-account-id obj))) 
     (when secret-key
       (let ((existing-prod-id (stripe-product-id obj)))
-	(if existing-prod-id
-	    (progn
-	      (stripe-request secret-key 
-			      (format nil "/products/~a" existing-prod-id) 
-			      :post
-			      `(("name" . ,(stripe-item-name obj))
-				("tax_code" . ,(stripe-tax-code obj))))
-	      
-	      (let* ((price-payload `(("product" . ,existing-prod-id)
-				      ("currency" . ,(stripe-item-currency obj))
-				      ("unit_amount" . ,(princ-to-string
-							 (stripe-item-price-cents obj)))
-				      ("tax_behavior" . "exclusive")))
-		     (price-res (stripe-request secret-key "/prices" :post price-payload)))
-		(setf (stripe-price-id obj)
-		      (cdr (assoc :id price-res)))))
+        (if existing-prod-id
+            (progn
+              (stripe-request secret-key (format nil "/products/~a" existing-prod-id) :post
+                              `(("name" . ,(stripe-item-name obj))
+                                ("tax_code" . ,(stripe-tax-code obj)))
+                              :stripe-account account-id)
+              
+              (let* ((price-payload `(("product" . ,existing-prod-id)
+                                      ("currency" . ,(stripe-item-currency obj))
+                                      ("unit_amount" . ,(princ-to-string (stripe-item-price-cents obj)))
+                                      ("tax_behavior" . "exclusive")))
+                     (price-res (stripe-request secret-key "/prices" :post price-payload :stripe-account account-id)))
+                (setf (stripe-price-id obj) (cdr (assoc :id price-res)))))
 
-	    (let* ((payload `(("currency" . ,(stripe-item-currency obj))
-			      ("unit_amount" . ,(princ-to-string
-						 (stripe-item-price-cents obj)))
-			      ("tax_behavior" . "exclusive")
-			      ("product_data[name]" . ,(stripe-item-name obj))
-			      ("product_data[tax_code]" . ,(stripe-tax-code obj))))
-		   (res (stripe-request secret-key "/prices" :post payload)))
-	      
-	      (setf (stripe-price-id obj) (cdr (assoc :id res)))
-	      (setf (stripe-product-id obj) (cdr (assoc :product res))))))))
+            (let* ((payload `(("currency" . ,(stripe-item-currency obj))
+                              ("unit_amount" . ,(princ-to-string (stripe-item-price-cents obj)))
+                              ("tax_behavior" . "exclusive")
+                              ("product_data[name]" . ,(stripe-item-name obj))
+                              ("product_data[tax_code]" . ,(stripe-tax-code obj))))
+                   (res (stripe-request secret-key "/prices" :post payload :stripe-account account-id)))
+              
+              (setf (stripe-price-id obj) (cdr (assoc :id res)))
+              (setf (stripe-product-id obj) (cdr (assoc :product res))))))))
   obj)
 
 ;;;
@@ -115,30 +114,23 @@
 (defgeneric stripe-line-item-quantity (obj)
   (:documentation "Returns the integer quantity for the object."))
 
-(defun create-checkout-session (secret-key success-url cancel-url line-items reference-id &rest extra-params)
-  "Creates a tax-aware Stripe checkout session. EXTRA-PARAMS accepts arbitrary alist pairs for Stripe options."
+(defun create-checkout-session (secret-key success-url cancel-url line-items reference-id 
+				&key stripe-account extra-params)
   (let ((payload `(("success_url" . ,success-url)
-                   ("cancel_url" . ,cancel-url)
-                   ("mode" . "payment")
-                   ("client_reference_id" . ,reference-id)
-                   ("automatic_tax[enabled]" . "true"))))
+		   ("cancel_url" . ,cancel-url)
+		   ("mode" . "payment")
+		   ("client_reference_id" . ,reference-id)
+		   ("automatic_tax[enabled]" . "true"))))
     
-    ;; Append arbitrary extra parameters (like customer_email, shipping_options, etc.)
     (when extra-params
       (setf payload (append extra-params payload)))
     
-    ;; Stripe requires arrays formatted as: line_items[0][price]=price_123
     (loop for item in line-items
-          for i from 0
-          do (push (cons (format nil "line_items[~d][price]" i) 
-                         (stripe-line-item-price-id item)) 
-                   payload)
-             (push (cons (format nil "line_items[~d][quantity]" i) 
-                         (princ-to-string (stripe-line-item-quantity item))) 
-                   payload))
+	  for i from 0
+	  do (push (cons (format nil "line_items[~d][price]" i) (stripe-line-item-price-id item)) payload)
+	     (push (cons (format nil "line_items[~d][quantity]" i) (princ-to-string (stripe-line-item-quantity item))) payload))
     
-    (let ((res (stripe-request secret-key "/checkout/sessions" :post payload)))
-      ;; Return the Stripe-hosted checkout URL
+    (let ((res (stripe-request secret-key "/checkout/sessions" :post payload :stripe-account stripe-account)))
       (cdr (assoc :url res)))))
 
 (defun verify-stripe-signature (raw-body signature-header endpoint-secret)
