@@ -9,7 +9,7 @@
   ((tax-code :initarg :tax-code
              :accessor stripe-tax-code
              :col-type (or (:varchar 255) :null)
-             :initform "txcd_99999999")
+             :initform nil)
    (stripe-product-id :initarg :stripe-product-id
                       :accessor stripe-product-id
                       :col-type (or (:varchar 255) :null)
